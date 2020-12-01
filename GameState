@@ -1,0 +1,62 @@
+package States;
+
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+
+import Input.Camera;
+import Input.KeyInput;
+import Input.TaskButtonMouseInput;
+import Main.Game;
+import Networking.Client;
+import Objects.SpriteSheet;
+
+public class GameState extends State{
+	BufferedImage map = null;
+	BufferedImage taskButton = null;
+	public int[][] taskButtons;
+	TaskButtonMouseInput input;
+	
+	public GameState() {
+		map = SpriteSheet.allSheets.get(1).sheet;
+		taskButton = SpriteSheet.allSheets.get(2).sheet;
+		taskButtons = new int[][] {{450 - (map.getWidth() / 2), 750 - (map.getHeight() / 2)}};
+		
+		input = new TaskButtonMouseInput(this);
+	}
+	
+	public void render(Graphics2D g2d) {
+		g2d.drawImage(map, -map.getWidth() / 2, -map.getHeight() / 2, null);
+		
+		try {
+			
+			for(int i = 0; i < taskButtons.length; i++) {
+				g2d.drawImage(taskButton, taskButtons[i][0], taskButtons[i][1], 100, 100, null);
+			}
+			
+			Game.semaphore.acquire();
+			Camera.updateCamera();
+			
+			for(int i = 0; i < Client.allCharacters.size(); i++) {
+				Client.allCharacters.get(i).draw(g2d);
+			}
+			
+			Game.semaphore.release();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
+	public void tick() {
+		try {
+			
+		} catch (Exception e) {}
+	}
+
+	
+	public void broadcast() {
+		Client.send(Client.toByteArray(new Object[] {"setKeys", KeyInput.keys, KeyInput.directionKeys}));
+	}
+}
