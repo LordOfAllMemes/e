@@ -1,0 +1,135 @@
+package Main;
+
+import java.awt.Canvas;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.Toolkit;
+import java.awt.image.BufferStrategy;
+import java.awt.image.BufferedImage;
+import java.util.concurrent.Semaphore;
+
+import javax.swing.JFrame;
+
+import Input.Camera;
+import Input.KeyInput;
+import Networking.Client;
+import States.State;
+
+public class Game implements Runnable{
+	Thread thread;
+	boolean running = false;
+	
+	public static JFrame frame;
+	public static Canvas canvas;
+	public static BufferedImage screen;
+	
+	public static Semaphore semaphore = new Semaphore(1);
+	Font normalFont = new Font("Arial", Font.PLAIN, 30);
+	
+	public void init() {
+		Toolkit.getDefaualtToolkit().sync();
+		
+		frame = new JFrame();
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setLocationRelativeTo(null);
+		frame.setVisible(true);
+		frame.setSize(800, 450);
+		
+		Dimension size = frame.getSize();
+		canvas = new Canvas();
+		canvas.setMinimumSize(size);
+		canvas.setPreferredSize(size);
+		canvas.setMaximumSize(size);
+		canvas.setVisible(true);
+		frame.add(canvas);
+		
+		canvas.createBufferStrategy(3);
+		screen = new BufferedImage(1600, 900, BufferedImage.TYPE_INT_RGB);
+		
+		canvas.addKeyListener(new KeyInput());
+	}
+	
+	public void run() {
+		init();
+		
+		long lastNow = System.nanoTime();
+		double delta = 0;
+		double ns = 1000000000 / 60.0;
+		
+		double broadcastDelta = 0;
+		double broadcastNs = 1000000000 / 10.0;
+		
+		while(running) {
+			long now = System.nanoTime();
+			delta += now - lastNow;
+			broadcastDelta += now - lastNow;
+			lastNow = now;
+			
+			if(delta >= ns) {
+				tick();
+				render();
+				delta -= ns;
+			}
+			
+			if(broadcastDelta > broadcastNs) {
+				broadcast();
+				broadcastDelta -= broadcastNs;
+			}
+		}
+	}
+	
+	public void tick() {
+		State.currentState.tick();
+	}
+	
+	public void render() {
+		BufferStrategy bs = canvas.getBufferStrategy();
+		Graphics g = bs.getDrawGraphics();
+		Graphics2D g2d = (Graphics2D) screen.getGraphics();
+		
+		g.clearRect(0, 0, canvas.getWidth(), canvas.getHeight());
+		g2d.clearRect(0, 0, screen.getWidth(), screen.getHeight());
+		
+		g2d.translate(-Camera.getX(), -Camera.getY());
+		
+		State.currentState.render(g2d);
+		g.drawImage(screen, 0, 0, canvas.getWidth(), canvas.getHeight(), null);
+		
+		g.setFont(normalFont);
+		g.setColor(Color.WHITE);
+		g.drawString(Client.totalTasks + " out of " + (Client.allCharacters.size() * 10) + " tasks are done ", 0, 30);
+		
+		g2d.translate(Camera.getX(), Camera.getY());
+		bs.show();
+		g.dispose();
+		g2d.dispose();
+	}
+	
+	public void broadcast() {
+		State.currentState.broadcast();
+	}
+	
+	public synchronized void start() {
+		if(running)
+			return;
+		
+		running = true;
+		thread = new Thread(this);
+		thread.start();
+	}
+	
+	public synchronized void stop() {
+		System.out.println("Game stopped");
+		if(!running)
+			return;
+		
+		try {
+			thread.join();
+		} catch (InterruptedException e) {
+			System.exit(0);
+		}
+	}
+}
