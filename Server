@@ -1,0 +1,227 @@
+package Networking;
+
+import java.awt.Color;
+import java.awt.Rectangle;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferByte;
+import java.awt.image.DataBufferInt;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.SocketException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.Semaphore;
+
+import Objects.CharacterObject;
+import Objects.SpriteSheet;
+
+public class Server {
+	public List<CharacterObject> allCharacters = new ArrayList<CharacterObject>();
+	public List<PlayerInfo> playersData = new ArrayList<PlayerInfo>();
+	HashMap<InetAddress, HashMap<Integer, Integer>> getClientNum = new HashMap<InetAddress, HashMap<Integer, Integer>>();
+	
+	public DatagramSocket socket;
+	int totalTasks;
+	Semaphore semaphore = new Semaphore(1);
+	
+	Rectangle[][] colRecs;
+	
+	Thread updateThread = new Thread() {
+		public void run() {	
+			
+			long lastNow = System.nanoTime();
+			double delta = 0.0;
+			double ns = 1000000000 / 60.0;
+			
+			double animationDelta = 0;
+			double animationNs = 1000000000 / 12.0;
+			
+			while(true) {
+				try {
+					long now = System.nanoTime();
+					delta += now - lastNow;
+					animationDelta += now - lastNow;
+					lastNow = now;
+					
+					while(animationDelta >= animationNs) {
+						semaphore.acquire();
+						globalAnimate();
+						semaphore.release();
+						animationDelta -= animationNs;
+					}
+					
+					while(delta >= ns) {
+						semaphore.acquire();
+						globalTick();
+						broadcast();
+						semaphore.release();
+						
+						delta -= ns;
+					}
+				} catch (Exception e) {e.printStackTrace();}
+			}
+			
+		}
+	};
+	
+	public Server() {
+		try {
+			socket = new DatagramSocket(0);
+			
+			BufferedImage map = SpriteSheet.allSheets.get(1).sheet;
+			colRecs = new Rectangle[map.getWidth() / 16][map.getHeight() / 16];
+			
+			for(int x = 0; x < colRecs.length; x++) {
+				for(int y = 0; y < colRecs[x].length; y++) {
+					if(map.getRGB(x * 16, y * 16) >> 24 == 0x00) 
+						colRecs[x][y] = new Rectangle((int) (x * 16) -  map.getWidth() / 2, (int) (y * 16) - map.getHeight() / 2, 16, 16);
+				}
+			}
+			
+			listener.start();
+			updateThread.start();
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+			System.exit(0);
+		}
+	}
+	
+	
+	public void globalTick() {
+		for(int i = 0; i < playersData.size(); i++) {
+			boolean[] directionKeys = playersData.get(i).directionKeys;
+			CharacterObject character = allCharacters.get(i);
+			
+			double originalX = character.x;
+			double originalY = character.y;
+			
+			if(directionKeys[0] && !directionKeys[2]) {
+				character.y -= 3;
+			} else if (directionKeys[2] && !directionKeys[0]) {
+				character.y += 3;
+			}
+			
+			if(directionKeys[1] && !directionKeys[3]) {
+				character.x -= 3;
+				character.animator.direction = false;
+			} else if(directionKeys[3] && !directionKeys[1]) {
+				character.x += 3;
+				character.animator.direction = true;
+			}
+			
+			character.animator.running =
+					(directionKeys[0] && !directionKeys[2]) ||
+					(directionKeys[2] && !directionKeys[0]) ||
+					(directionKeys[1] && !directionKeys[3]) ||
+					(directionKeys[3] && !directionKeys[1]);
+			
+			character.tick();
+			
+			for(int x = 0; x < colRecs.length; x++) {
+				for(int y = 0; y < colRecs[i].length; y++) {
+					if(colRecs[x][y] != null && colRecs[x][y].getBounds().intersects(character.collisionRec)) {
+						character.x = originalX;
+						character.y = originalY;
+					}
+				}
+			}
+		}
+	}
+	
+	public void globalAnimate() {
+		for(int i = 0; i < allCharacters.size(); i++) {
+			allCharacters.get(i).animate();
+		}
+	}
+	
+	public void broadcast() {
+		for(int i = 0; i < playersData.size(); i++) {
+			try {
+				send(Client.toByteArray(new Object[] {allCharacters, i, totalTasks}), playersData.get(i).address, playersData.get(i).port);
+			} catch (Exception e) {
+				
+			}
+		} 
+	}
+	
+	
+	
+	
+	
+	public void newPlayer(InetAddress address, int port) {
+		try {
+			allCharacters.add(new CharacterObject(0, 0, 0, 0, 0));
+			playersData.add(new PlayerInfo(address, port));
+		
+			getClientNum.putIfAbsent(address, new HashMap<Integer, Integer>());
+			getClientNum.get(address).putIfAbsent(port, allCharacters.size() - 1);
+		} catch (Exception e) {}
+	}
+	
+	public void setKeys(int player, boolean[] keys, boolean[] directionKeys) {
+		try {
+			
+			if(keys.length != 1000 || directionKeys.length != 4) 
+				return;
+			
+			playersData.get(player).keys = keys;
+			playersData.get(player).directionKeys = directionKeys;
+			
+		} catch(Exception e) {}
+	}
+	
+	public void taskDone(int player) {
+		if(playersData.get(player).tasksDone >= 10)
+			return;
+		
+		playersData.get(player).tasksDone += 1;
+		totalTasks++;
+	}
+	
+	
+	
+	
+	public void send(byte[] rawData, InetAddress address, int port) {
+		try {
+			DatagramPacket packet = new DatagramPacket(rawData, rawData.length, address, port);
+			socket.send(packet);
+		} catch (Exception e) {}
+	}
+	
+	Thread listener = new Thread() {
+		public void run() {
+			
+			while(true) {
+				try {
+					byte[] rawData = new byte[102400];
+					DatagramPacket packet = new DatagramPacket(rawData, rawData.length);
+					
+					socket.receive(packet);
+					
+					Object[] data = (Object[]) Client.toData(rawData);
+					String method = (String) data[0];
+					
+					if(method.equalsIgnoreCase("newPlayer") || method.equalsIgnoreCase("setKeys") || method.equalsIgnoreCase("taskDone"))
+						semaphore.acquire();
+					
+					if(method.equalsIgnoreCase("newPlayer")) {
+						newPlayer(packet.getAddress(), packet.getPort());
+					} else if(method.equalsIgnoreCase("setKeys")) {
+						setKeys(getClientNum.get(packet.getAddress()).get(packet.getPort()), (boolean[]) data[1], (boolean[]) data[2]);
+					} else if(method.equalsIgnoreCase("taskDone")) {
+						taskDone(getClientNum.get(packet.getAddress()).get(packet.getPort()));
+					}
+					
+					if(method.equalsIgnoreCase("newPlayer") || method.equalsIgnoreCase("setKeys") || method.equalsIgnoreCase("taskDone"))
+						semaphore.release();
+					
+				} catch (Exception e) {}
+			}
+			
+		}
+	};
+}
