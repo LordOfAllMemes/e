@@ -1,0 +1,93 @@
+package Networking;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.List;
+
+import Input.Camera;
+import Main.Game;
+import Objects.CharacterObject;
+
+public class Client implements Runnable{
+	
+	static DatagramSocket socket;
+	boolean running = false;
+	
+	public static List<CharacterObject> allCharacters = new ArrayList<CharacterObject>();
+	public static int characterNum = -1;
+	public static int totalTasks = 0;
+	
+	public Client(InetAddress address, int port) {
+		try {
+			socket = new DatagramSocket(0);
+			
+			socket.connect(address, port);
+			
+			running = true;
+			Thread thread = new Thread(this);
+			thread.start();
+			
+		} catch (Exception e) {
+			System.exit(0);
+		}
+	}
+	
+	public void run() {
+		while(running) {
+			try {
+				byte[] rawData = new byte[10240];
+				DatagramPacket packet = new DatagramPacket(rawData, rawData.length);
+				socket.receive(packet);
+				
+				Object[] data = (Object[]) Client.toData(rawData);
+				
+				Game.semaphore.acquire();
+				allCharacters = (List<CharacterObject>) data[0];
+				characterNum = (int) data[1];
+				totalTasks = (int) data[2];
+				Game.semaphore.release();
+				
+			} catch (Exception e) {}
+		}
+	}
+	
+	public synchronized static void send(byte[] data) {
+		try {
+			DatagramPacket packet = new DatagramPacket(data, data.length, socket.getInetAddress(), socket.getPort());
+			
+			socket.send(packet);
+		} catch (Exception e) {}
+	}
+	
+	public static byte[] toByteArray(Object object) {
+		try {
+			ByteArrayOutputStream bos = new ByteArrayOutputStream();
+			ObjectOutputStream oos = new ObjectOutputStream(bos);
+		
+			oos.writeObject(object);		
+		
+			return bos.toByteArray();
+		} catch (Exception e) {}
+		
+		return null;
+	}
+	
+	public static Object toData(byte[] data) {
+		try {
+			
+			ByteArrayInputStream bis = new ByteArrayInputStream(data);
+			ObjectInputStream ois = new ObjectInputStream(bis);
+			
+			return ois.readObject();
+		} catch (Exception e) {}
+		
+		return null;
+	}
+	
+}
